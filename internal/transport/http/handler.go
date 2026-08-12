@@ -50,15 +50,18 @@ func userFromClaims(c authmw.Claims) domain.User {
 	}
 }
 
+// requireAuth hanya menuntut token SSO yang sah. Sengaja TIDAK menuntut
+// keanggotaan divisi: layanan panggilan ini lintas divisi, dan di produksi ada
+// akun sah yang peta `roles`-nya kosong (mis. direktur yang belum didaftarkan ke
+// departemen mana pun). Menolak mereka membuat tombol panggilan mati dengan
+// pesan "belum dikonfigurasi" yang menyesatkan. Pembatasan yang sesungguhnya
+// ada di lapisan meeting: siapa yang diundang, siapa host — lihat
+// domain.Meeting.RoleFor.
 func (h *Handler) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, err := h.verify.Verify(bearer(r))
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, err.Error())
-			return
-		}
-		if !claims.Super && len(claims.Roles) == 0 {
-			writeError(w, http.StatusForbidden, "akun tidak terdaftar di divisi mana pun")
 			return
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), userCtxKey, userFromClaims(claims))))
@@ -107,8 +110,8 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ws(w http.ResponseWriter, r *http.Request) {
 	h.hub.serve(w, r, func(tok string) bool {
-		claims, err := h.verify.Verify(tok)
-		return err == nil && (claims.Super || len(claims.Roles) > 0)
+		_, err := h.verify.Verify(tok)
+		return err == nil // aturan sama dengan requireAuth: token sah sudah cukup
 	})
 }
 
