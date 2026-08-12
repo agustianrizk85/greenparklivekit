@@ -24,3 +24,6 @@ recordings/
 # Sampah OS
 .DS_Store
 Thumbs.db
+
+# Backup biner yang dibuat go build saat exe lama masih terkunci (Windows).
+*.exe~
