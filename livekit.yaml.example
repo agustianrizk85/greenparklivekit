@@ -1,0 +1,186 @@
+# =============================================================================
+# Contoh konfigurasi SERVER MEDIA LiveKit (livekit-server) — mode single-node,
+# untuk VPS Greenpark (Ubuntu + cPanel/WHM, Apache di depan sebagai TLS).
+#
+# Berkas ini BUKAN konfigurasi backend `greenparklivekitbe` — itu di `.env`
+# (lihat .env.example). Ini konfigurasi server media-nya sendiri.
+#
+# Salin ke server:  /opt/apps/livekit/livekit.yaml
+# Jalankan:         livekit-server --config /opt/apps/livekit/livekit.yaml
+#
+# Acuan nama field: livekit-server **v1.13.5** —
+#   https://github.com/livekit/livekit/blob/v1.13.5/config-sample.yaml
+#   struct: pkg/config/config.go + mediatransportutil/pkg/rtcconfig/config.go
+#
+# Kabar baik: livekit-server memakai **strict config parsing** secara bawaan
+# (cmd/server/main.go: strictMode = !--disable-strict-config). Field yang salah
+# ketik / tidak dikenal membuat server GAGAL START dengan pesan seperti
+# `field port_udp not found in type config.RTCConfig` — bukan diabaikan diam-
+# diam. Jadi kalau `pm2 status` menunjukkan livekit-media terus restart setelah
+# mengubah berkas ini, baca `pm2 logs livekit-media`: kemungkinan besar salah
+# ketik nama field. JANGAN akali dengan `--disable-strict-config` (flag
+# tersembunyi) — itu justru mengembalikan perilaku "diam-diam salah".
+# =============================================================================
+
+
+# --- 1. Port signaling (HTTP/WebSocket) --------------------------------------
+# Port TCP utama: RoomService (server API) + endpoint /rtc (signaling WebSocket).
+# TIDAK dibuka ke publik di firewall. Browser masuk lewat Apache
+# (wss://dahsboard.greenparkgroup.cloud/livekit) yang mem-proxy ke sini,
+# jadi TLS diurus Apache dan port ini cukup dijangkau dari localhost.
+port: 7880
+
+# Opsional (pengerasan): batasi listener signaling hanya ke loopback, supaya
+# port 7880 tidak bisa disentuh langsung dari internet meski firewall lalai.
+# Terverifikasi di pkg/service/server.go v1.13.5: `bind_addresses` hanya dipakai
+# untuk listener HTTP (signaling/prometheus/debug) — TIDAK memengaruhi port RTC
+# (tcp_port / udp_port), jadi WebRTC tetap jalan.
+# Backend kita (:8089) dan Apache sama-sama memanggil 127.0.0.1, jadi aman.
+# bind_addresses:
+#   - 127.0.0.1
+
+
+# --- 2. WebRTC (lalu lintas media) -------------------------------------------
+# Ini jalur media sesungguhnya, TIDAK lewat Apache. Port di bawah HARUS
+# dibuka di firewall (ufw / CSF) dan langsung menghadap internet.
+rtc:
+  # Fallback ICE/TCP saat UDP diblokir jaringan peserta (kantor/hotel/korporat).
+  # Wajib terbuka di firewall, tidak boleh di belakang load balancer / TLS.
+  # Trafik WebRTC sudah terenkripsi sendiri (DTLS-SRTP), tidak perlu TLS lagi.
+  tcp_port: 7881
+
+  # UDP mux — SATU port UDP untuk semua peserta (bukan rentang 50000-60000).
+  # Dipilih karena jauh lebih mudah diurus di firewall CSF/cPanel.
+  #
+  # ⚠️ NAMA FIELD-NYA `udp_port`, BUKAN `port_udp`.
+  #    `port_udp` tidak ada di skema mana pun; karena strict parsing, server
+  #    akan menolak start (bukan diam-diam salah). Bagus — tapi tetap jangan
+  #    salah ketik.
+  #
+  # ⚠️ `udp_port` hanya berlaku kalau `port_range_start` / `port_range_end`
+  #    TIDAK di-set. Terverifikasi di rtcconfig/webrtc_config.go: rentang
+  #    diperiksa lebih dulu, `udp_port` baru dipakai kalau rentang kosong.
+  #    Karena itu dua field tersebut sengaja TIDAK ditulis di berkas ini.
+  #    Buktikan hasil akhirnya (bukan tebak-tebakan) dengan:
+  #      ./livekit-server ports --config /opt/apps/livekit/livekit.yaml
+  #    Harus tercetak "7882 - ICE/UDP", BUKAN "50000-60000 - ICE/UDP range".
+  #
+  # Boleh juga rentang kecil, mis. `udp_port: 7882-7892` — LiveKit menyarankan
+  # jumlah port >= jumlah vCPU untuk performa maksimal. Untuk rapat internal
+  # skala kita, satu port sudah cukup.
+  udp_port: 7882
+
+  # Server punya IP publik langsung (bukan di belakang NAT cloud), tapi opsi ini
+  # tetap aman dinyalakan: LiveKit menemukan IP publik lewat STUN dan
+  # mengiklankannya sebagai ICE candidate. Tanpa ini, kandidat yang diiklankan
+  # bisa berupa IP internal yang tidak bisa dihubungi peserta.
+  use_external_ip: true
+
+  # Kalau STUN salah menebak IP (jarang, tapi pernah terjadi di VPS ber-NAT),
+  # matikan use_external_ip lalu tulis IP publiknya manual di sini:
+  # node_ip: 202.10.38.100
+
+  # Kalau VPS tidak bisa "self-ping" ke IP publiknya sendiri (beberapa provider
+  # memblokir hairpin NAT), LiveKit bisa gagal memvalidasi IP eksternal dan
+  # menolak start. Nyalakan ini untuk melewati pemeriksaan tersebut:
+  # skip_external_ip_validation: true
+
+
+# --- 3. Kunci API (key : secret) ---------------------------------------------
+# Dipakai untuk menandatangani access token (JWT) peserta DAN untuk memanggil
+# server API dari backend kita. Formatnya map: `namaKunci: rahasianya`.
+#
+# Bangkitkan (di server, jangan pakai contoh di bawah apa adanya):
+#   openssl rand -hex 16       # -> nama kunci  (LIVEKIT_API_KEY)
+#   openssl rand -base64 48    # -> rahasia     (LIVEKIT_API_SECRET, 64 karakter)
+#
+# ⚠️ Nilai di sini HARUS SAMA PERSIS (byte demi byte) dengan
+#    LIVEKIT_API_KEY / LIVEKIT_API_SECRET di /opt/apps/livekit.env.
+#    Kalau beda, gejalanya bukan error jelas: peserta gagal join dengan
+#    "invalid token" / "unauthorized", padahal kedua service tampak sehat.
+#    Ini sumber kesalahan paling sering di setup ini.
+#
+# Rahasia minimal 32 karakter (deploy.sh backend memperingatkan kalau kurang).
+# Tanda kutip dipakai supaya karakter base64 (+ / =) tidak salah ditafsir YAML.
+keys:
+  KUNCI: "RAHASIA_MINIMAL_32_KARAKTER_GANTI_INI_PAKAI_openssl_rand"
+
+
+# --- 4. Logging --------------------------------------------------------------
+# Keluarannya ditangkap PM2 (`pm2 logs livekit-media`).
+logging:
+  # debug | info | warn | error
+  level: info
+  # Level log pustaka WebRTC (pion). Biarkan error — kalau debug, log membanjir.
+  pion_level: error
+  # true = keluaran JSON. Untuk dibaca manusia via pm2 logs, biarkan false.
+  json: false
+  # Sampling log untuk produksi (mengurangi log berulang). Nyalakan kalau
+  # log terlalu ramai saat rapat besar.
+  sample: false
+
+
+# --- 5. Webhook --------------------------------------------------------------
+# LiveKit mengirim event room (peserta masuk/keluar, room mulai/selesai,
+# egress) ke backend kita. TANPA ini, status meeting & daftar peserta di
+# dashboard tidak pernah ter-update otomatis.
+#
+# URL harus bisa dijangkau server LiveKit. Karena LiveKit jalan di VPS yang
+# sama dengan Apache, URL publik https di bawah tetap sah (keluar lalu balik
+# lagi lewat Apache) — pakai ini supaya tanda tangan & TLS-nya sama dengan
+# yang dilihat backend.
+webhook:
+  # HARUS salah satu nama kunci di blok `keys:` di atas — dipakai LiveKit untuk
+  # menandatangani payload webhook, dan dipakai backend untuk memverifikasinya.
+  api_key: "KUNCI"
+  urls:
+    - https://dahsboard.greenparkgroup.cloud/be/livekit/api/livekit/webhook
+
+
+# --- 6. TURN bawaan (DIMATIKAN) ----------------------------------------------
+# Kapan ini dibutuhkan?
+#   Kalau ada peserta di jaringan yang memblokir UDP *dan* memblokir port TCP
+#   tidak lazim (7881). Contoh nyata: kantor/pabrik dengan firewall ketat yang
+#   cuma mengizinkan 80/443 keluar. Gejalanya: peserta terlihat "connected"
+#   di daftar, tapi tidak ada suara/video sama sekali (ICE gagal).
+#
+# Kenapa dimatikan sekarang?
+#   TURN/TLS yang berguna harus di port 443 — dan 443 di VPS ini sudah dipakai
+#   Apache (dashboard + semua subdomain). Menjalankan keduanya butuh salah satu:
+#     (a) IP publik kedua khusus TURN, atau
+#     (b) coturn terpisah di server lain, atau
+#     (c) TURN di 5349 (bukan 443) — menolong sebagian kasus saja.
+#   Jadi ini keputusan manusia, bukan sekadar menyalakan flag.
+#
+# Nama field di bawah sudah dicocokkan dengan TURNConfig v1.13.5.
+# turn:
+#   enabled: true
+#   # Harus cocok dengan domain pada sertifikat TLS yang dipakai.
+#   domain: turn.greenparkgroup.cloud
+#   # Default 5349. Kalau TIDAK di belakang load balancer, ini harus 443 supaya
+#   # benar-benar menembus firewall korporat — dan 443 di sini bentrok Apache.
+#   tls_port: 5349
+#   # Default 3478. Hanya 53/80/443 yang diizinkan bila < 1024.
+#   udp_port: 3478
+#   # Sertifikat: isi kalau TLS diterminasi oleh LiveKit sendiri.
+#   # cert_file: /etc/letsencrypt/live/turn.greenparkgroup.cloud/fullchain.pem
+#   # key_file:  /etc/letsencrypt/live/turn.greenparkgroup.cloud/privkey.pem
+#   # Set true kalau TLS diterminasi di depan (L4 LB); LiveKit lalu menerima
+#   # trafik polos di tls_port tapi tetap mengiklankannya sebagai TURN/TLS.
+#   external_tls: false
+#   # Rentang UDP untuk relay TURN -> SFU. Ikut dibuka di firewall kalau dipakai.
+#   relay_range_start: 30000
+#   relay_range_end: 31000
+#   # Umur kredensial TURN (detik), default 300.
+#   ttl_seconds: 300
+
+
+# --- 7. Yang SENGAJA tidak dipakai -------------------------------------------
+# redis:    hanya untuk multi-node. Single-node tidak perlu — JANGAN diisi
+#           asal-asalan; kalau diisi dan Redis mati, server ikut gagal start.
+#           CATATAN: service `livekit/egress` (rekaman & streaming RTMP)
+#           MEWAJIBKAN Redis. Jadi begitu Egress dipasang, blok ini harus ada.
+# ingress:  hanya kalau mau menerima RTMP/WHIP masuk (siaran dari OBS).
+# room:     default room (empty_timeout dll). Backend kita sudah menentukan
+#           sendiri saat CreateRoom, jadi biarkan default.
+# node_selector / limit / region: khusus kluster multi-node.
