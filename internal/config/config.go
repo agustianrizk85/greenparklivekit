@@ -22,7 +22,17 @@ type Config struct {
 	Department  string // kode departemen service ini (untuk pesan/guard authmw)
 
 	// LiveKit (Cloud maupun self-hosted).
-	LiveKitURL       string // wss://xxx.livekit.cloud atau ws://localhost:7880
+	//
+	// Dua URL karena dua pemakai yang berbeda:
+	//   LiveKitURL       — dipakai SERVICE ini untuk memanggil API LiveKit.
+	//                      Saat self-host, ini alamat lokal (ws://127.0.0.1:7880)
+	//                      yang tidak perlu TLS dan tidak lewat reverse proxy.
+	//   LiveKitPublicURL — yang dikirim ke BROWSER. Halaman https hanya boleh
+	//                      menyambung ke wss://, jadi alamat lokal di atas akan
+	//                      ditolak browser. Kosongkan kalau keduanya sama
+	//                      (mis. LiveKit Cloud).
+	LiveKitURL       string // ws://127.0.0.1:7880 atau wss://xxx.livekit.cloud
+	LiveKitPublicURL string // wss://domain-anda/livekit (opsional)
 	LiveKitAPIKey    string
 	LiveKitAPISecret string
 	TokenTTL         time.Duration
@@ -46,6 +56,7 @@ func Load() Config {
 		Department:  getenv("LIVEKIT_DEPARTMENT", "livekit"),
 
 		LiveKitURL:       getenv("LIVEKIT_URL", "ws://localhost:7880"),
+		LiveKitPublicURL: os.Getenv("LIVEKIT_PUBLIC_URL"),
 		LiveKitAPIKey:    os.Getenv("LIVEKIT_API_KEY"),
 		LiveKitAPISecret: os.Getenv("LIVEKIT_API_SECRET"),
 		TokenTTL:         getdur("LIVEKIT_TOKEN_TTL_MIN", 240) * time.Minute,

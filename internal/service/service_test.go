@@ -134,6 +134,35 @@ func TestMeetingLifecycleDanToken(t *testing.T) {
 	}
 }
 
+func TestAlamatUntukBrowserTerpisahDariAlamatInternal(t *testing.T) {
+	st, err := store.New(filepath.Join(t.TempDir(), "d.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := lk.New(lk.Config{URL: "ws://127.0.0.1:7880", APIKey: "devkey", APISecret: "secretsecretsecretsecretsecret32", TokenTTL: time.Hour})
+	u := domain.User{ID: "u1", Username: "budi", Roles: map[string]string{"teknik": "admin"}}
+
+	// Tanpa PublicURL: browser diberi alamat yang sama dengan yang dipakai service.
+	svc := New(st, c, Options{TokenTTL: time.Hour})
+	if got := svc.Config().URL; got != "ws://127.0.0.1:7880" {
+		t.Fatalf("tanpa PublicURL harusnya alamat internal, dapat %q", got)
+	}
+
+	// Dengan PublicURL (kasus self-host di balik reverse proxy): browser diberi
+	// alamat wss publik, bukan 127.0.0.1 yang pasti gagal dari luar.
+	svc = New(st, c, Options{TokenTTL: time.Hour, PublicURL: "wss://contoh.id/livekit"})
+	if got := svc.Config().URL; got != "wss://contoh.id/livekit" {
+		t.Fatalf("Config().URL salah: %q", got)
+	}
+	res, err := svc.AdHocToken(context.Background(), u, TokenRequest{Room: "rapat"})
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	if res.URL != "wss://contoh.id/livekit" {
+		t.Fatalf("URL di hasil join salah: %q", res.URL)
+	}
+}
+
 func TestKlienNonaktifMenolakDenganPesanJelas(t *testing.T) {
 	st, err := store.New(filepath.Join(t.TempDir(), "d.json"))
 	if err != nil {

@@ -46,7 +46,11 @@ func main() {
 		RecordDir: cfg.RecordDir,
 		AgentName: cfg.AgentName,
 		TokenTTL:  cfg.TokenTTL,
+		PublicURL: cfg.LiveKitPublicURL,
 	})
+	if cfg.LiveKitPublicURL != "" {
+		log.Printf("livekit: alamat untuk browser = %s", cfg.LiveKitPublicURL)
+	}
 
 	verifier, err := authmw.New(authmw.Options{
 		JWKSURL:    cfg.AuthJWKSURL,

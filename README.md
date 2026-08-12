@@ -96,6 +96,14 @@ livekit-server --dev
 ```
 
 Mode dev memakai key `devkey` / secret `secret` dan listen di `ws://localhost:7880`.
+
+> **Self-host di produksi: WAJIB isi `LIVEKIT_PUBLIC_URL`.** Service ini memanggil
+> LiveKit lewat alamat lokal (`LIVEKIT_URL=ws://127.0.0.1:7880`) yang tidak perlu
+> TLS, tetapi alamat itu tidak berarti apa-apa bagi browser — dan halaman `https`
+> menolak menyambung ke `ws://` polos. Jadi isi `LIVEKIT_PUBLIC_URL` dengan
+> alamat publik lewat reverse proxy, mis. `wss://<domain>/livekit`. Nilai inilah
+> yang dikirim ke klien di jawaban `/api/config` dan `/api/meetings/{id}/join`.
+> Untuk LiveKit Cloud biarkan kosong — satu URL sudah cukup untuk keduanya.
 Catatan: **Egress** (rekam & streaming RTMP) butuh service `livekit/egress`
 terpisah beserta **Redis**, dan **tidak tersedia** di mode dev — endpoint
 `record/*` dan `stream/*` tidak akan berfungsi sampai egress dipasang.

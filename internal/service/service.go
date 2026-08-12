@@ -29,6 +29,11 @@ type Options struct {
 	RecordDir string
 	AgentName string
 	TokenTTL  time.Duration
+	// PublicURL adalah alamat LiveKit yang dikirim ke browser. Kosong = pakai
+	// alamat yang dipakai service ini sendiri. Keduanya berbeda saat LiveKit
+	// di-self-host: service memanggil ws://127.0.0.1:7880, sedangkan halaman
+	// https hanya boleh menyambung ke wss:// lewat reverse proxy.
+	PublicURL string
 }
 
 // Service menyatukan store, klien LiveKit, dan kebijakan akses.
@@ -62,10 +67,18 @@ type Config struct {
 	TokenTTL  int    `json:"tokenTtlMinutes"`
 }
 
+// clientURL adalah alamat LiveKit yang layak dikirim ke browser.
+func (s *Service) clientURL() string {
+	if u := strings.TrimSpace(s.opts.PublicURL); u != "" {
+		return u
+	}
+	return s.lkc.URL()
+}
+
 // Config mengembalikan konfigurasi klien.
 func (s *Service) Config() Config {
 	return Config{
-		URL:       s.lkc.URL(),
+		URL:       s.clientURL(),
 		Enabled:   s.lkc.Enabled(),
 		Egress:    s.lkc.Enabled(),
 		AgentName: s.opts.AgentName,
@@ -328,7 +341,7 @@ func (s *Service) Join(ctx context.Context, u domain.User, id string) (JoinResul
 	}
 
 	return JoinResult{
-		URL:       s.lkc.URL(),
+		URL:       s.clientURL(),
 		Token:     tok,
 		Room:      m.Room,
 		Role:      role,
@@ -389,7 +402,7 @@ func (s *Service) AdHocToken(ctx context.Context, u domain.User, req TokenReques
 	if err != nil {
 		return JoinResult{}, err
 	}
-	return JoinResult{URL: s.lkc.URL(), Token: tok, Room: room, Role: role, Identity: g.Identity, ExpiresAt: exp}, nil
+	return JoinResult{URL: s.clientURL(), Token: tok, Room: room, Role: role, Identity: g.Identity, ExpiresAt: exp}, nil
 }
 
 func (s *Service) grantFor(m domain.Meeting, u domain.User, role domain.Role) lk.Grant {
