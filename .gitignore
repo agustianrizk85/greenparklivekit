@@ -1,0 +1,26 @@
+# Compiled binary (hasil go build) — nama sengaja "livekit-be-server" supaya
+# tidak bentrok dengan biner resmi LiveKit yang bernama "livekit-server".
+livekit-be-server
+*.exe
+*.test
+
+# Persisted store (file JSON, di-seed/ditulis saat runtime)
+/data/
+
+# Konfigurasi runtime per-mesin — memuat LIVEKIT_API_SECRET (RAHASIA —
+# jangan di-commit). Lihat .env.example untuk daftar variabelnya.
+.env
+.env.*
+!.env.example
+
+# Log runtime lokal (redirect stdout/stderr saat menjalankan service) —
+# artefak mesin masing-masing, jangan pernah masuk repo.
+*.log
+run.local.*
+
+# Hasil rekaman/egress (file media besar — jangan di-commit)
+recordings/
+
+# Sampah OS
+.DS_Store
+Thumbs.db
