@@ -139,9 +139,13 @@ func (s *Service) CreateMeeting(ctx context.Context, u domain.User, in MeetingIn
 	if title == "" {
 		return domain.Meeting{}, fmt.Errorf("%w: judul wajib diisi", domain.ErrValidation)
 	}
+	// Room yang disebut eksplisit tetap deterministik (bentrokan di situ memang
+	// harus dicegah). Yang diturunkan dari judul diberi akhiran acak — lihat
+	// store.SlugRoomUnique untuk alasannya ("data sudah ada" pada panggilan
+	// berulang ke orang yang sama).
 	room := store.SlugRoom(strings.TrimSpace(in.Room))
 	if strings.TrimSpace(in.Room) == "" {
-		room = store.SlugRoom(title)
+		room = store.SlugRoomUnique(title)
 	}
 	kind := in.Kind
 	if kind == "" {

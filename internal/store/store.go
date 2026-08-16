@@ -388,6 +388,51 @@ func SlugRoom(title string) string {
 	return slug
 }
 
+// suffixLen adalah panjang akhiran acak pada SlugRoomUnique. Enam karakter hex
+// = 16 juta kemungkinan; cukup jauh untuk room yang umurnya hitungan jam.
+const suffixLen = 6
+
+// SlugRoomUnique sama seperti SlugRoom, tapi selalu menambahkan akhiran acak
+// sehingga judul yang sama TIDAK pernah menghasilkan nama room yang sama.
+//
+// Dipakai untuk room yang namanya diturunkan otomatis dari judul — terutama
+// panggilan, yang judulnya berisi nama peserta ("Panggilan grup — Budi, Ani").
+// Dengan SlugRoom biasa, menelepon orang yang sama dua kali menghasilkan nama
+// room yang identik; kalau panggilan sebelumnya belum berstatus ended (peserta
+// menutup tab, jaringan putus, atau panggilannya gagal di tengah), CreateMeeting
+// menolaknya sebagai ErrConflict dan pemakai melihat pesan "data sudah ada"
+// padahal ia merasa tidak sedang menelepon siapa pun.
+//
+// Room yang namanya DISEBUT EKSPLISIT sengaja tidak lewat sini: untuk rapat
+// terjadwal (mis. "rapat-mingguan") nama yang tetap justru yang diinginkan, dan
+// pemeriksaan bentrokan di sana memang benar.
+func SlugRoomUnique(title string) string {
+	slug := SlugRoom(title)
+	// Sisakan tempat untuk "-" + akhiran supaya tetap di bawah maxRoomLen.
+	if len(slug)+1+suffixLen > maxRoomLen {
+		slug = strings.Trim(slug[:maxRoomLen-suffixLen-1], "-")
+	}
+	if slug == "" {
+		return "room-" + shortID()
+	}
+	return slug + "-" + shortID()
+}
+
+// shortID mengembalikan akhiran acak sepanjang suffixLen karakter hex.
+func shortID() string {
+	b := make([]byte, (suffixLen+1)/2)
+	if _, err := rand.Read(b); err != nil {
+		// Entropi sistem gagal — jam sistem sudah cukup untuk membedakan, karena
+		// yang dicegah di sini cuma tabrakan antar-panggilan berturut-turut.
+		s := strconv.FormatInt(time.Now().UnixNano(), 36)
+		if len(s) > suffixLen {
+			return s[len(s)-suffixLen:]
+		}
+		return s
+	}
+	return hex.EncodeToString(b)[:suffixLen]
+}
+
 // matchFilter melaporkan apakah meeting lolos seluruh kriteria filter.
 func matchFilter(m domain.Meeting, f domain.MeetingFilter) bool {
 	if d := strings.TrimSpace(f.Division); d != "" {

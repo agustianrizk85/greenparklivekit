@@ -154,6 +154,18 @@ type Meeting struct {
 	AgentName       string `json:"agentName,omitempty"`
 	AgentMetadata   string `json:"agentMetadata,omitempty"`
 
+	// Tautan TAMU — peserta luar (klien, vendor, calon pembeli) yang tidak punya
+	// akun Greenpark. Sengaja dua hal terpisah:
+	//
+	//   GuestEnabled — boleh dibaca siapa pun yang melihat meeting, supaya UI
+	//                  bisa menandai "rapat ini terbuka untuk tamu".
+	//   GuestToken   — RAHASIA: siapa pun yang memegangnya bisa masuk tanpa
+	//                  login. Karena itu `json:"-"`: ia tidak pernah ikut di
+	//                  daftar meeting, dan hanya dikembalikan oleh endpoint
+	//                  khusus yang dijaga CanManage.
+	GuestEnabled bool   `json:"guestEnabled"`
+	GuestToken   string `json:"-"`
+
 	Invitees   []Invitee   `json:"invitees,omitempty"`
 	Recordings []Recording `json:"recordings,omitempty"`
 

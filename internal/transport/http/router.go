@@ -16,6 +16,12 @@ func NewRouter(h *Handler, allowOrigin string) http.Handler {
 	mux.HandleFunc("GET /api/health", h.health)
 	mux.HandleFunc("POST /api/livekit/webhook", h.webhook)
 
+	// PUBLIK — tautan tamu (peserta luar tanpa akun Greenpark).
+	// Token acak di URL adalah SATU-SATUNYA bukti berhak di sini, dan tamu tidak
+	// pernah mendapat hak admin room. Pembatasan lengkapnya di service/guest.go.
+	mux.HandleFunc("GET /api/tamu/{token}", h.guestMeeting)
+	mux.HandleFunc("POST /api/tamu/{token}/join", h.guestJoin)
+
 	// sesi
 	mux.HandleFunc("GET /api/config", h.requireAuth(h.config))
 	mux.HandleFunc("GET /api/auth/me", h.requireAuth(h.me))
@@ -38,6 +44,11 @@ func NewRouter(h *Handler, allowOrigin string) http.Handler {
 	mux.HandleFunc("GET /api/meetings/{id}/participants", h.requireAuth(h.participants))
 	mux.HandleFunc("POST /api/meetings/{id}/kick", h.requireAuth(h.kick))
 	mux.HandleFunc("POST /api/meetings/{id}/mute", h.requireAuth(h.mute))
+
+	// tautan tamu — dikelola host/direksi (dijaga CanManage di service)
+	mux.HandleFunc("GET /api/meetings/{id}/guest", h.requireAuth(h.guestLinkGet))
+	mux.HandleFunc("POST /api/meetings/{id}/guest", h.requireAuth(h.guestLinkOn))
+	mux.HandleFunc("DELETE /api/meetings/{id}/guest", h.requireAuth(h.guestLinkOff))
 
 	// egress: rekam & streaming
 	mux.HandleFunc("GET /api/meetings/{id}/egress", h.requireAuth(h.listEgress))
