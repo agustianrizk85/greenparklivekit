@@ -11,6 +11,7 @@ import (
 	nethttp "net/http"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"greenpark/livekit/internal/domain"
@@ -42,6 +43,10 @@ type Service struct {
 	lkc  *lk.Client
 	opts Options
 	bc   Broadcaster
+
+	// Pembatas percobaan kode tamu, per rapat (lihat guest.go).
+	guestMu    sync.Mutex
+	guestTries map[string]*percobaanTamu
 }
 
 // New membuat Service.

@@ -21,32 +21,32 @@ import (
 // (POST = nyalakan, DELETE = matikan). Menerima flag di body hanya menambah
 // keadaan yang bisa bertentangan dengan metodenya.
 func (h *Handler) guestLinkOn(w http.ResponseWriter, r *http.Request) {
-	m, token, err := h.svc.GuestLink(caller(r), r.PathValue("id"), true)
+	m, token, code, err := h.svc.GuestLink(caller(r), r.PathValue("id"), true)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"guestToken": token, "meeting": m})
+	writeJSON(w, http.StatusOK, map[string]any{"guestToken": token, "guestCode": code, "meeting": m})
 }
 
 // DELETE /api/meetings/{id}/guest — matikan tautan tamu (host).
 func (h *Handler) guestLinkOff(w http.ResponseWriter, r *http.Request) {
-	m, _, err := h.svc.GuestLink(caller(r), r.PathValue("id"), false)
+	m, _, _, err := h.svc.GuestLink(caller(r), r.PathValue("id"), false)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"guestToken": "", "meeting": m})
+	writeJSON(w, http.StatusOK, map[string]any{"guestToken": "", "guestCode": "", "meeting": m})
 }
 
 // GET /api/meetings/{id}/guest — baca token yang berlaku (host).
 func (h *Handler) guestLinkGet(w http.ResponseWriter, r *http.Request) {
-	token, err := h.svc.GuestToken(caller(r), r.PathValue("id"))
+	token, code, err := h.svc.GuestToken(caller(r), r.PathValue("id"))
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"guestToken": token})
+	writeJSON(w, http.StatusOK, map[string]string{"guestToken": token, "guestCode": code})
 }
 
 /* ---- PUBLIK: tanpa autentikasi ------------------------------------------- */
@@ -63,6 +63,9 @@ func (h *Handler) guestMeeting(w http.ResponseWriter, r *http.Request) {
 
 type guestJoinBody struct {
 	Name string `json:"name"`
+	// Code = kode pendek yang diketik tamu. Kosong sah untuk tautan lama yang
+	// dibuat sebelum kode ada.
+	Code string `json:"code"`
 }
 
 // POST /api/tamu/{token}/join — terbitkan token LiveKit untuk tamu.
@@ -72,7 +75,7 @@ func (h *Handler) guestJoin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "isi permintaan tidak valid")
 		return
 	}
-	res, err := h.svc.JoinAsGuest(r.Context(), r.PathValue("token"), body.Name)
+	res, err := h.svc.JoinAsGuest(r.Context(), r.PathValue("token"), body.Name, body.Code)
 	if err != nil {
 		writeServiceError(w, err)
 		return

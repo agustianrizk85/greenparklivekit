@@ -165,6 +165,15 @@ type Meeting struct {
 	//                  khusus yang dijaga CanManage.
 	GuestEnabled bool   `json:"guestEnabled"`
 	GuestToken   string `json:"-"`
+	// GuestCode — kode pendek yang harus DIKETIK tamu setelah membuka tautan.
+	// Faktor kedua yang sengaja dikirim lewat jalur BERBEDA dari tautannya:
+	// tautan rapat gampang sekali diteruskan ke grup obrolan, dan token panjang
+	// di dalamnya sudah cukup untuk masuk. Dengan kode ini, tautan yang bocor
+	// saja tidak lagi memadai.
+	//
+	// RAHASIA seperti GuestToken — hanya host yang boleh membacanya. Kosong =
+	// tautan lama yang dibuat sebelum kode ada; tetap berlaku tanpa kode.
+	GuestCode string `json:"-"`
 
 	Invitees   []Invitee   `json:"invitees,omitempty"`
 	Recordings []Recording `json:"recordings,omitempty"`

@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -42,6 +44,39 @@ const guestTokenBytes = 32
 // tampil di layar semua peserta; tanpa batas ia bisa dipakai merusak tata letak.
 const maxGuestNameLen = 60
 
+// guestCodeDigits = panjang kode pendek yang diketik tamu. Enam angka dipilih
+// supaya masih bisa didiktekan lewat telepon; keamanannya TIDAK bersandar pada
+// panjangnya, melainkan pada (a) token 32 byte di tautan yang harus dipegang
+// lebih dulu, dan (b) pembatas percobaan di bawah.
+const guestCodeDigits = 6
+
+// maxGuestCodeAttempts membatasi percobaan kode SALAH per token sebelum tautan
+// itu berhenti melayani sementara.
+//
+// Tanpa ini, kode enam angka bisa ditebak habis oleh siapa pun yang memegang
+// tautannya — sejuta percobaan bukan penghalang bagi skrip. Hitungannya per
+// TOKEN (bukan per IP): yang dilindungi adalah rapatnya, dan pengganti IP
+// gampang sekali.
+const maxGuestCodeAttempts = 10
+
+// guestCodeCooldown = lama tautan didinginkan setelah percobaan habis.
+const guestCodeCooldown = 15 * time.Minute
+
+// newGuestCode membuat kode numerik acak. rand kriptografis, bukan pseudo —
+// kode yang bisa diramalkan sama saja dengan tidak ada kode.
+func newGuestCode() (string, error) {
+	const digits = "0123456789"
+	b := make([]byte, guestCodeDigits)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("gagal membuat kode tamu: %w", err)
+	}
+	out := make([]byte, guestCodeDigits)
+	for i, v := range b {
+		out[i] = digits[int(v)%len(digits)]
+	}
+	return string(out), nil
+}
+
 func newGuestToken() (string, error) {
 	b := make([]byte, guestTokenBytes)
 	if _, err := rand.Read(b); err != nil {
@@ -72,19 +107,22 @@ func bersihkanNamaTamu(s string) string {
 //
 // Menyalakan saat sudah menyala akan MEMBUAT ULANG token (rotasi) — itu cara
 // mencabut tautan yang terlanjur tersebar tanpa harus mematikan fiturnya.
-func (s *Service) GuestLink(u domain.User, id string, enable bool) (domain.Meeting, string, error) {
+func (s *Service) GuestLink(u domain.User, id string, enable bool) (domain.Meeting, string, string, error) {
 	m, err := s.st.GetMeeting(id)
 	if err != nil {
-		return domain.Meeting{}, "", err
+		return domain.Meeting{}, "", "", err
 	}
 	if !m.CanManage(u) {
-		return domain.Meeting{}, "", domain.ErrForbidden
+		return domain.Meeting{}, "", "", domain.ErrForbidden
 	}
 
-	token := ""
+	token, code := "", ""
 	if enable {
 		if token, err = newGuestToken(); err != nil {
-			return domain.Meeting{}, "", err
+			return domain.Meeting{}, "", "", err
+		}
+		if code, err = newGuestCode(); err != nil {
+			return domain.Meeting{}, "", "", err
 		}
 	}
 	saved, err := s.st.UpdateMeeting(id, func(mm *domain.Meeting) error {
@@ -93,29 +131,86 @@ func (s *Service) GuestLink(u domain.User, id string, enable bool) (domain.Meeti
 		// masih tersimpan adalah tautan yang masih bisa dipakai kalau suatu saat
 		// pemeriksaan `GuestEnabled` terlewat di jalur baru.
 		mm.GuestToken = token
+		mm.GuestCode = code
 		return nil
 	})
 	if err != nil {
-		return domain.Meeting{}, "", err
+		return domain.Meeting{}, "", "", err
 	}
+	// Rotasi tautan = percobaan yang tercatat ikut dilupakan; kalau tidak,
+	// tautan BARU lahir dalam keadaan sudah didinginkan.
+	s.lupakanPercobaanTamu(id)
 	s.push("meeting.updated", saved)
-	return saved, token, nil
+	return saved, token, code, nil
 }
 
-// GuestToken mengembalikan token yang berlaku (untuk menyusun ulang tautannya
-// di UI). Hanya host/direksi.
-func (s *Service) GuestToken(u domain.User, id string) (string, error) {
+// GuestToken mengembalikan token + kode yang berlaku (untuk menyusun ulang
+// tautannya di UI). Hanya host/direksi.
+func (s *Service) GuestToken(u domain.User, id string) (string, string, error) {
 	m, err := s.st.GetMeeting(id)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if !m.CanManage(u) {
-		return "", domain.ErrForbidden
+		return "", "", domain.ErrForbidden
 	}
 	if !m.GuestEnabled || m.GuestToken == "" {
-		return "", domain.ErrNotFound
+		return "", "", domain.ErrNotFound
 	}
-	return m.GuestToken, nil
+	return m.GuestToken, m.GuestCode, nil
+}
+
+/* ---- pembatas percobaan kode ------------------------------------------- */
+
+// percobaanTamu mencatat kegagalan kode per rapat. Di memori dengan sengaja:
+// pembatas ini melindungi dari penebakan beruntun dalam hitungan menit, dan
+// layanan yang di-restart di tengah serangan tetap menyisakan hambatan utama —
+// token 32 byte yang harus dipegang lebih dulu.
+type percobaanTamu struct {
+	gagal  int
+	sampai time.Time // selama masih di depan, tautan didinginkan
+}
+
+// bolehCobaKode melaporkan apakah token ini masih boleh mencoba kode.
+func (s *Service) bolehCobaKode(meetingID string) (bool, time.Duration) {
+	s.guestMu.Lock()
+	defer s.guestMu.Unlock()
+	p, ok := s.guestTries[meetingID]
+	if !ok || p.sampai.IsZero() {
+		return true, 0
+	}
+	if sisa := time.Until(p.sampai); sisa > 0 {
+		return false, sisa
+	}
+	delete(s.guestTries, meetingID)
+	return true, 0
+}
+
+// catatKodeSalah menambah hitungan gagal dan mendinginkan tautan bila melampaui
+// batas.
+func (s *Service) catatKodeSalah(meetingID string) {
+	s.guestMu.Lock()
+	defer s.guestMu.Unlock()
+	if s.guestTries == nil {
+		s.guestTries = map[string]*percobaanTamu{}
+	}
+	p, ok := s.guestTries[meetingID]
+	if !ok {
+		p = &percobaanTamu{}
+		s.guestTries[meetingID] = p
+	}
+	p.gagal++
+	if p.gagal >= maxGuestCodeAttempts {
+		p.sampai = time.Now().Add(guestCodeCooldown)
+		p.gagal = 0
+	}
+}
+
+// lupakanPercobaanTamu menghapus catatan kegagalan (kode benar / tautan dirotasi).
+func (s *Service) lupakanPercobaanTamu(meetingID string) {
+	s.guestMu.Lock()
+	defer s.guestMu.Unlock()
+	delete(s.guestTries, meetingID)
 }
 
 // meetingByGuestToken mencari meeting dari token tamu.
@@ -141,6 +236,9 @@ type GuestMeetingInfo struct {
 	Title  string `json:"title"`
 	Status string `json:"status"`
 	Kind   string `json:"kind"`
+	// CodeRequired memberi tahu halaman tamu untuk meminta kode. Nilai kodenya
+	// sendiri TIDAK pernah ikut -- halaman ini publik.
+	CodeRequired bool `json:"codeRequired"`
 }
 
 // GuestMeeting dipakai halaman tamu sebelum ia mengisi nama. PUBLIK.
@@ -149,7 +247,10 @@ func (s *Service) GuestMeeting(token string) (GuestMeetingInfo, error) {
 	if err != nil {
 		return GuestMeetingInfo{}, err
 	}
-	return GuestMeetingInfo{Title: m.Title, Status: string(m.Status), Kind: string(m.Kind)}, nil
+	return GuestMeetingInfo{
+		Title: m.Title, Status: string(m.Status), Kind: string(m.Kind),
+		CodeRequired: m.GuestCode != "",
+	}, nil
 }
 
 // guestRole menentukan peran tamu. TIDAK memakai RoleFor: aturan di sana bisa
@@ -164,7 +265,7 @@ func guestRole(m domain.Meeting) domain.Role {
 
 // JoinAsGuest menerbitkan token LiveKit untuk peserta luar. PUBLIK — tidak ada
 // SSO di sini, jadi tokenlah satu-satunya bukti berhak.
-func (s *Service) JoinAsGuest(ctx context.Context, token, nama string) (JoinResult, error) {
+func (s *Service) JoinAsGuest(ctx context.Context, token, nama, kode string) (JoinResult, error) {
 	m, err := s.meetingByGuestToken(token)
 	if err != nil {
 		return JoinResult{}, err
@@ -172,6 +273,26 @@ func (s *Service) JoinAsGuest(ctx context.Context, token, nama string) (JoinResu
 	if m.Status == domain.StatusEnded {
 		return JoinResult{}, fmt.Errorf("%w: rapat sudah berakhir", domain.ErrValidation)
 	}
+
+	// Kode diperiksa SEBELUM apa pun disiapkan: room tidak dibuat, token tidak
+	// diterbitkan, tidak ada jejak untuk penebak. Tautan lama tanpa kode
+	// (GuestCode kosong) tetap berlaku apa adanya.
+	if m.GuestCode != "" {
+		if boleh, sisa := s.bolehCobaKode(m.ID); !boleh {
+			return JoinResult{}, fmt.Errorf("%w: terlalu banyak percobaan, coba lagi dalam %d menit",
+				domain.ErrValidation, int(sisa.Minutes())+1)
+		}
+		// ConstantTimeCompare: membandingkan dengan == akan berhenti di angka
+		// pertama yang beda, dan selisih waktunya bisa dipakai menebak kode
+		// digit demi digit.
+		diberi := strings.TrimSpace(kode)
+		if subtle.ConstantTimeCompare([]byte(diberi), []byte(m.GuestCode)) != 1 {
+			s.catatKodeSalah(m.ID)
+			return JoinResult{}, fmt.Errorf("%w: kode akses salah", domain.ErrValidation)
+		}
+		s.lupakanPercobaanTamu(m.ID)
+	}
+
 	if !s.lkc.Enabled() {
 		return JoinResult{}, domain.ErrDisabled
 	}
@@ -187,7 +308,14 @@ func (s *Service) JoinAsGuest(ctx context.Context, token, nama string) (JoinResu
 		EmptyTimeout:    m.EmptyTimeout,
 		MaxParticipants: m.MaxParticipants,
 	}); err != nil {
-		return JoinResult{}, fmt.Errorf("gagal menyiapkan room: %w", err)
+		// Yang membaca pesan ini orang LUAR. Galat asli membawa alamat dan nama
+		// layanan internal ("http://localhost:7880/twirp/livekit.RoomService/…"),
+		// dan itu tidak boleh keluar dari jalur yang tidak terautentikasi — juga
+		// tidak berguna baginya. Rinciannya dicatat di log; tamunya diberi
+		// kalimat yang bisa ia tindak lanjuti.
+		log.Printf("livekit: gagal menyiapkan room tamu %q: %v", m.Room, err)
+		return JoinResult{}, fmt.Errorf("%w: rapat belum bisa dimulai — hubungi pengundang Anda",
+			domain.ErrValidation)
 	}
 
 	// Identitas tamu diberi awalan "tamu:" DAN akhiran acak. Awalannya supaya

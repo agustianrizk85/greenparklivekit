@@ -54,7 +54,11 @@ func TestMeetingLifecycleDanToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if m.Room != "rapat-progres-blok-a" {
+	// Nama room = slug judul + akhiran acak (sejak room dibuat selalu unik, agar
+	// dua rapat berjudul sama tidak berbagi satu room). Yang diuji karena itu
+	// AWALANNYA, bukan kesamaan persis — asersi lama tertinggal saat akhiran itu
+	// ditambahkan dan membuat berkas tes ini merah.
+	if !strings.HasPrefix(m.Room, "rapat-progres-blok-a-") {
 		t.Fatalf("slug room salah: %q", m.Room)
 	}
 	if m.HostID != "u1" || m.Division != "teknik" {
